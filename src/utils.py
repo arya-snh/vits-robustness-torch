@@ -119,7 +119,7 @@ class AdvTrainState(bits.TrainState):
                               Tuple[torch.Tensor, torch.Tensor,
                                     Optional[torch.Tensor]]] = None  # type: ignore
     eps_schedule: attacks.EpsSchedule = None  # type: ignore
-
+    anchor_inputs_tensor: torch.Tensor = None
     # pytype: enable=annotation-type-mismatch
 
     @classmethod
