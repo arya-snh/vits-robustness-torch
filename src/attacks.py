@@ -286,6 +286,7 @@ class TRADESLoss(nn.Module):
                  attack_cfg: AttackCfg,
                  natural_criterion: nn.Module,
                  beta: float,
+                 gamma: float,
                  dev_env: DeviceEnv,
                  num_classes: int,
                  eval_mode: bool = False):
@@ -305,11 +306,12 @@ class TRADESLoss(nn.Module):
                                         dev_env=dev_env)
         self.natural_criterion = natural_criterion
         self.kl_criterion = nn.KLDivLoss(reduction="sum")
+        self.gamma = gamma
         self.beta = beta
         self.eval_mode = eval_mode
 
     def forward(self, model: nn.Module, x: torch.Tensor, y: torch.Tensor,
-                epoch: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                epoch: int, anchor_inputs_tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size = x.size(0)
         # Avoid setting the model in eval mode if on XLA (it crashes)
         if self.eval_mode:
@@ -320,7 +322,118 @@ class TRADESLoss(nn.Module):
         model.train()
         logits, logits_adv = model(x), model(x_adv)
         loss_natural = self.natural_criterion(logits, y)
+
+        softmax = F.softmax(logits, dim=1)  # Shape: (batch_size, num_classes)
+        softmax_adv = F.softmax(logits_adv, dim=1)  # Shape: (batch_size, num_classes)
+
+        # ## EDITED
+        # num_classes = softmax.size(1)
+        # loss_robust_mean_kl_old = 0
+        # loss_robust_mean_kl_new = 0
+
+        # softmax_mean = torch.zeros(size=(num_classes, num_classes))
+        # adv_softmax_mean = torch.zeros(size=(num_classes, num_classes))
+
+        # for class_idx in range(num_classes):
+        #     class_softmax_vectors = softmax[(softmax.argmax(dim=1) == class_idx)]
+        #     softmax_per_class = torch.mean(class_softmax_vectors, dim=0)
+        #     softmax_mean[class_idx] = softmax_per_class
+        # print(softmax_mean)
+
+        # for class_idx in range(num_classes):
+        #     adv_class_softmax_vectors = softmax_adv[(softmax_adv.argmax(dim=1) == class_idx)]
+        #     adv_softmax_per_class = torch.mean(adv_class_softmax_vectors, dim=0)
+        #     adv_softmax_mean[class_idx] = adv_softmax_per_class
+        # # print(adv_softmax_mean)
+
+        # for i in range(num_classes):
+        #     if torch.isnan(adv_softmax_mean[i]).any() or torch.isnan(softmax_mean[i]).any():
+        #         continue
+        #         # print(f"Mean softmax vector for class {i} contains NaN values.")
+        #     else:
+        #         loss_robust_mean_kl_old += self.kl_criterion(torch.log(adv_softmax_mean[i]), softmax_mean[i])
+        #         loss_robust_mean_kl_new += self.kl_criterion(torch.log(adv_softmax_mean[i]), softmax_mean[i])
+        # # print(loss_robust_mean_kl_old)
+
+        # for i in range(num_classes):
+        #     if torch.isnan(softmax_mean[i]).any():
+        #         continue
+        #         # print(f"Mean softmax vector for class {i} contains NaN values.")
+        #     else:
+        #         for j in range(i+1, num_classes):
+        #             if torch.isnan(softmax_mean[j]).any():
+        #                 continue
+        #                 # print(f"Mean softmax vector for class {j} contains NaN values.")
+        #             else:
+        #                 loss_robust_mean_kl_old -= self.kl_criterion(torch.log(softmax_mean[j]), softmax_mean[i])
+
+        # for i in range(num_classes):
+        #     if torch.isnan(softmax_mean[i]).any():
+        #         continue
+        #         # print(f"Mean softmax vector for class {i} contains NaN values.")
+        #     else:
+        #         indices_except_i = [j for j in range(num_classes) if j != i and not torch.isnan(softmax_mean[j]).any()]
+        #         average_except_i = torch.mean(softmax_mean[indices_except_i].float())
+        #         loss_robust_mean_kl_new -= self.kl_criterion(torch.log(average_except_i), softmax_mean[i])
+
+        # loss_robust_mean_kl_old = self.relu(loss_robust_mean_kl_old)
+        # loss_robust_mean_kl_new = self.relu(loss_robust_mean_kl_new)
+                    
+        #   CHECK EVAL MODE / TRAIN MODE
+        with torch.no_grad():
+            model.eval() 
+            anchor_logits = model(anchor_inputs_tensor)
+
+        model.train()
+
+        anchor_vectors_softmax = F.softmax(anchor_logits/3.0, dim=1)
+
+        anchor_vectors_transpose = anchor_logits.t()
+
+        M1 = torch.matmul(softmax, anchor_vectors_transpose)
+        M1_softmax = F.softmax(M1, dim=1)
+
+        M2 = torch.matmul(softmax_adv, anchor_vectors_transpose)
+        M2_softmax = F.softmax(M2, dim=1)
+
+        cluster_loss = (1.0 / batch_size) * self.kl_criterion(torch.log(M2_softmax), M1_softmax)
+        # # Create S matrix
+        # S = (y.unsqueeze(1) == y.unsqueeze(0)).float()  # Shape: (batch_size, batch_size)
+        # num_classes = softmax.size(1)
+
+        # # Expand dimensions for broadcasting
+        # softmax_expanded = softmax.unsqueeze(1)
+        # softmax_adv_expanded = softmax_adv.unsqueeze(0)
+
+        # # Repeat A and B to match each other's size
+        # softmax_repeated = softmax_expanded.repeat(1, softmax_adv.size(0), 1) 
+        # softmax_adv_repeated = softmax_adv_expanded.repeat(softmax.size(0), 1, 1)  
+
+        # # Concatenate A and B along the second dimension to form the combination matrix
+        # combination_matrix = torch.cat((softmax_repeated, softmax_adv_repeated), dim=2)
+        
+        # expanded_matrix = S.unsqueeze(2).repeat(1, 1, num_classes*2)
+        
+        # # Reshape to 1D matrix
+        # S = expanded_matrix.view(S.size(0), S.size(1), num_classes*2)
+        # all_combinations = S * combination_matrix
+
+        # # Remove zero rows
+        # non_zero_combinations = all_combinations[~torch.all(all_combinations == 0, dim=2)]
+
+        # # Split into two matrices column-wise
+        # matrix1 = non_zero_combinations[:, :num_classes]
+        # matrix2 = non_zero_combinations[:, num_classes:]
+
+        # loss_robust = (1.0 / matrix1.size(0)) * self.kl_criterion(matrix2, matrix1)
+
         loss_robust = (1.0 / batch_size) * self.kl_criterion(F.log_softmax(logits_adv, dim=1),
                                                              F.softmax(logits, dim=1))
-        loss = loss_natural + self.beta * loss_robust
+        # if loss_robust_mean_kl > 0.0:
+        #     ratio = loss_natural / loss_robust_mean_kl
+        #     print(ratio)
+        wandb.log({"natural loss": loss_natural, "KL loss": loss_robust, "cluster loss": cluster_loss})
+        
+        loss = loss_natural + self.gamma * cluster_loss
+                    
         return loss, logits, logits_adv
