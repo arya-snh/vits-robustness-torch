@@ -42,7 +42,7 @@ def train_one_epoch(
 
         # FIXME move forward + loss into model 'task' wrapper
         with dev_env.autocast():
-            loss, output, adv_output = state.compute_loss_fn(state.model, sample, target, state.epoch)
+            loss, output, adv_output = state.compute_loss_fn(state.model, sample, target, state.epoch, state.anchor_inputs_tensor)
 
         state.updater.apply(loss)
 
