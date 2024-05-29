@@ -413,5 +413,5 @@ class TRADESLoss(nn.Module):
                     
         loss_robust = (1.0 / batch_size) * self.kl_criterion(F.log_softmax(logits_adv, dim=1),
                                                              F.softmax(logits, dim=1))
-        loss = loss_natural + self.beta * loss_robust_mean_kl_new
+        loss = loss_natural + self.beta * loss_robust + self.gamma * loss_robust_mean_kl_new
         return loss, logits, logits_adv
