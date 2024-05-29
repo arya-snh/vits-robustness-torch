@@ -64,6 +64,74 @@ def main():
                                                         unwrap_model(train_state.model).default_cfg, dev_env,
                                                         mixup_active)
 
+    mean_feature_vectors = torch.zeros(size=(args.num_classes, args.num_classes), device=device)
+    class_sample_counts = torch.zeros(size=(args.num_classes,), dtype=torch.long, device=device)
+
+    for inputs, _ in loader_train:
+        inputs = inputs.to(device)
+        with torch.no_grad():
+            logits = train_state.model(inputs)
+            # Accumulate logits and count samples for each class
+            for class_idx in range(args.num_classes):
+                class_feature_vectors = logits[(logits.argmax(dim=1) == class_idx)]
+                mean_feature_vectors[class_idx] += torch.sum(class_feature_vectors, dim=0)
+                class_sample_counts[class_idx] += class_feature_vectors.size(0)
+
+    # Compute mean feature vectors
+    for class_idx in range(args.num_classes):
+        mean_feature_vectors[class_idx] /= class_sample_counts[class_idx]
+
+    # # Multi sampled anchor inputs
+    # # Initialize anchor_inputs and anchor_distances as lists of lists to store anchor inputs and distances for each class
+    # anchor_inputs = [[] for _ in range(args.num_classes)]
+    # anchor_distances = [[] for _ in range(args.num_classes)]
+
+    # for inputs, targets in loader_train:
+    #     inputs = inputs.to(device)
+    #     with torch.no_grad():
+    #         logits = train_state.model(inputs)
+    #         # Compute anchor inputs and distances, and update them if necessary
+    #         for class_idx in range(args.num_classes):
+    #             class_logits = logits[(targets == class_idx)]
+    #             if class_logits.size(0) > 0:  # Ensure there are samples for the class
+    #                 # Compute distances from mean feature vector
+    #                 distances = torch.norm(class_logits - mean_feature_vectors[class_idx], dim=1)
+    #                 # Update anchor_inputs and anchor_distances if the new distances are smaller
+    #                 for distance, input_tensor in zip(distances, inputs[(targets == class_idx)]):
+    #                     if len(anchor_distances[class_idx]) < 3 or distance < max(anchor_distances[class_idx]):
+    #                         anchor_inputs[class_idx].append(input_tensor.clone().detach())
+    #                         anchor_distances[class_idx].append(distance.item())
+    #                         if len(anchor_distances[class_idx]) > 3:
+    #                             max_index = anchor_distances[class_idx].index(max(anchor_distances[class_idx]))
+    #                             anchor_inputs[class_idx].pop(max_index)
+    #                             anchor_distances[class_idx].pop(max_index)
+
+    # # Convert anchor_inputs list of lists to a single tensor
+    # anchor_inputs_tensor = torch.cat([torch.stack(anchor_inputs[i]) for i in range(args.num_classes)], dim=0)
+    # train_state.anchor_inputs_tensor = anchor_inputs_tensor
+
+    # # Single sampled anchor inputs
+    # Initialize anchor_inputs as a list to store anchor inputs for each class 
+    anchor_inputs = [None] * args.num_classes 
+
+    for inputs, targets in loader_train: 
+        inputs = inputs.to(device) 
+        with torch.no_grad(): 
+            logits = train_state.model(inputs) # Compute anchor inputs and store corresponding inputs 
+            for class_idx in range(args.num_classes): 
+                class_logits = logits[(targets == class_idx)] # Ensure there are multiple samples for the class 
+                if class_logits.size(0) > 1: 
+                    # Compute distances from mean feature vector 
+                    distances = torch.norm(class_logits - mean_feature_vectors[class_idx], dim=1) 
+                    closest_idx = distances.argmin() 
+                    # Update anchor input if closer to mean feature vector 
+                    if anchor_inputs[class_idx] is None or distances[closest_idx] < torch.norm(train_state.model(anchor_inputs[class_idx].unsqueeze(0)) - mean_feature_vectors[class_idx]): 
+                        anchor_inputs[class_idx] = inputs[(targets == class_idx)][closest_idx].clone().detach() 
+
+    # Convert anchor_inputs list to torch tensor 
+    anchor_inputs_tensor = torch.stack(anchor_inputs) 
+    train_state.anchor_inputs_tensor = anchor_inputs_tensor
+
     if args.normalize_model:
         train_state = update_state_with_norm_model(dev_env, train_state, data_config)
 
