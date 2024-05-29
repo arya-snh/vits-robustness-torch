@@ -466,6 +466,7 @@ def setup_train_task(args, dev_env: DeviceEnv, mixup_active: bool):
             compute_loss_fn = attacks.TRADESLoss(attack_cfg,
                                                  train_loss_fn,
                                                  args.trades_beta,
+                                                 args.trades_gamma,
                                                  dev_env,
                                                  model.num_classes,
                                                  eval_mode=not dev_env.type_xla)
